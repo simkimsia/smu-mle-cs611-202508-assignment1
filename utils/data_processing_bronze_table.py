@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 
 from pyspark.sql.functions import col
@@ -19,8 +20,12 @@ def process_bronze_table(
     print(f"{file_path} - {snapshot_date_str} row count: {df.count()}")
 
     # save bronze table to datamart - IRL connect to database to write
+    # create output directory if it doesn't exist
+    if not os.path.exists(output_directory):
+        os.makedirs(output_directory)
+
     partition_name = f"{output_prefix}_{snapshot_date_str.replace('-', '_')}.csv"
-    filepath = output_directory + partition_name
+    filepath = os.path.join(output_directory, partition_name)
     df.toPandas().to_csv(filepath, index=False)
     print(f"saved to: {filepath}")
 

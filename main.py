@@ -62,12 +62,22 @@ print(
     f"Found CSV files for bronze processing: {[os.path.basename(f) for f in csv_files]}"
 )
 
+# define output directory mapping for different data sources
+output_directory_mapping = {
+    "lms_loan_daily.csv": "datamart/bronze/lms/",
+    "features_attributes.csv": "datamart/bronze/features/attributes",
+    "features_financials.csv": "datamart/bronze/features/financials",
+    "feature_clickstream.csv": "datamart/bronze/features/clickstream",
+}
+
 # run bronze backfill for all CSV files
 for csv_file in csv_files:
     filename = os.path.basename(csv_file)
     file_prefix = os.path.splitext(filename)[0]
+    target_directory = output_directory_mapping.get(filename, bronze_directory)
 
     print(f"\nProcessing bronze backfill for: {filename}")
+    print(f"  → Output directory: {target_directory}")
 
     # check if file has snapshot_date column (only check once, not for each date)
     sample_df = spark.read.csv(csv_file, header=True, inferSchema=True)
@@ -80,7 +90,7 @@ for csv_file in csv_files:
             utils.data_processing_bronze_table.process_bronze_table(
                 csv_file,
                 date_str,
-                bronze_directory,
+                target_directory,
                 f"bronze_{file_prefix}",
                 spark,
                 date_filter_column="snapshot_date",
@@ -91,7 +101,7 @@ for csv_file in csv_files:
         utils.data_processing_bronze_table.process_bronze_table(
             csv_file,
             dates_str_lst[0],  # use first date as placeholder
-            bronze_directory,
+            target_directory,
             f"bronze_{file_prefix}",
             spark,
             date_filter_column=None,
@@ -105,7 +115,7 @@ if not os.path.exists(silver_loan_daily_directory):
 
 # run silver backfill (still only for loan data as per original logic)
 for date_str in dates_str_lst:
-    utils.data_processing_silver_table.process_silver_table(
+    utils.data_processing_silver_table.process_silver_table_legacy(
         date_str, bronze_directory, silver_loan_daily_directory, spark
     )
 
