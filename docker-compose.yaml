@@ -9,3 +9,19 @@ services:
     environment:
       - JUPYTER_ENABLE_LAB=yes
     command: ["jupyter", "lab", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-root", "--notebook-dir=/app", "--ServerApp.token=''", "--ServerApp.disable_check_xsrf=True"]
+
+  etl-bronze:
+    build: .
+    container_name: etl_bronze_only
+    volumes:
+      - .:/app
+    command: ["python", "main.py", "--bronze-only"]
+    profiles: ["etl"]
+
+  etl-full:
+    build: .
+    container_name: etl_full_pipeline
+    volumes:
+      - .:/app
+    command: ["python", "main.py"]
+    profiles: ["etl"]
