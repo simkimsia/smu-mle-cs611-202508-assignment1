@@ -10,13 +10,24 @@ import utils.data_processing_gold_table
 import utils.data_processing_silver_table
 
 # Parse command line arguments
-parser = argparse.ArgumentParser(description='Run ETL pipeline with optional early exit')
-parser.add_argument('--bronze-only', action='store_true',
-                    help='Exit after bronze table processing (for testing bronze layer)')
-parser.add_argument('--timestamp', type=str,
-                    help='Use existing timestamp directory (format: YYYYMMDD_HHMMSS)')
-parser.add_argument('--layer', choices=['bronze', 'silver', 'gold'],
-                    help='Start processing from specific layer (requires --timestamp)')
+parser = argparse.ArgumentParser(
+    description="Run ETL pipeline with optional early exit"
+)
+parser.add_argument(
+    "--bronze-only",
+    action="store_true",
+    help="Exit after bronze table processing (for testing bronze layer)",
+)
+parser.add_argument(
+    "--timestamp",
+    type=str,
+    help="Use existing timestamp directory (format: YYYYMMDD_HHMMSS)",
+)
+parser.add_argument(
+    "--layer",
+    choices=["bronze", "silver", "gold"],
+    help="Start processing from specific layer (requires --timestamp)",
+)
 args = parser.parse_args()
 
 # Validate arguments
@@ -81,11 +92,11 @@ dates_str_lst = generate_first_of_month_dates(start_date_str, end_date_str)
 print(dates_str_lst)
 
 # Determine which layers to run based on arguments
-run_bronze = not args.layer or args.layer == 'bronze'
-run_silver = not args.layer or args.layer in ['bronze', 'silver']
-run_gold = not args.layer or args.layer in ['bronze', 'silver', 'gold']
+run_bronze = not args.layer or args.layer == "bronze"
+run_silver = not args.layer or args.layer in ["bronze", "silver"]
+run_gold = not args.layer or args.layer in ["bronze", "silver", "gold"]
 
-print(f"🔄 Pipeline execution plan:")
+print("🔄 Pipeline execution plan:")
 print(f"  Bronze: {'✓' if run_bronze else '⏩ Skip'}")
 print(f"  Silver: {'✓' if run_silver else '⏩ Skip'}")
 print(f"  Gold:   {'✓' if run_gold else '⏩ Skip'}")
@@ -163,16 +174,63 @@ if args.bronze_only:
 if run_silver:
     print("🥈 Processing Silver layer...")
 
+    # Create directory structure for all silver tables
     silver_loan_daily_directory = f"{silver_directory}loan_daily/"
+    silver_clickstream_directory = f"{silver_directory}clickstream/"
+    silver_attributes_directory = f"{silver_directory}attributes/"
+    silver_financials_directory = f"{silver_directory}financials/"
 
-    if not os.path.exists(silver_loan_daily_directory):
-        os.makedirs(silver_loan_daily_directory)
+    for directory in [silver_loan_daily_directory, silver_clickstream_directory,
+                     silver_attributes_directory, silver_financials_directory]:
+        if not os.path.exists(directory):
+            os.makedirs(directory)
 
-    # run silver backfill (still only for loan data as per original logic)
+    # Process loan daily data (existing logic)
+    print("  📊 Processing loan daily silver tables...")
+    bronze_lms_directory = f"{bronze_directory}lms/"
     for date_str in dates_str_lst:
         utils.data_processing_silver_table.process_silver_table_legacy(
-            date_str, bronze_directory, silver_loan_daily_directory, spark
+            date_str, bronze_lms_directory, silver_loan_daily_directory, spark
         )
+
+    # Process clickstream data
+    print("  🖱️ Processing clickstream silver tables...")
+    bronze_clickstream_directory = f"{bronze_directory}features/clickstream/"
+    for date_str in dates_str_lst:
+        bronze_filepath = f"{bronze_clickstream_directory}bronze_feature_clickstream_{date_str.replace('-', '_')}.csv"
+        silver_filepath = f"{silver_clickstream_directory}silver_clickstream_{date_str.replace('-', '_')}.parquet"
+
+        # Check if bronze file exists before processing
+        if os.path.exists(bronze_filepath):
+            utils.data_processing_silver_table.process_silver_table(
+                'clickstream', bronze_filepath, silver_filepath, spark
+            )
+
+    # Process attributes data
+    print("  👤 Processing attributes silver tables...")
+    bronze_attributes_directory = f"{bronze_directory}features/attributes/"
+    for date_str in dates_str_lst:
+        bronze_filepath = f"{bronze_attributes_directory}bronze_features_attributes_{date_str.replace('-', '_')}.csv"
+        silver_filepath = f"{silver_attributes_directory}silver_attributes_{date_str.replace('-', '_')}.parquet"
+
+        # Check if bronze file exists before processing
+        if os.path.exists(bronze_filepath):
+            utils.data_processing_silver_table.process_silver_table(
+                'attributes', bronze_filepath, silver_filepath, spark
+            )
+
+    # Process financials data
+    print("  💰 Processing financials silver tables...")
+    bronze_financials_directory = f"{bronze_directory}features/financials/"
+    for date_str in dates_str_lst:
+        bronze_filepath = f"{bronze_financials_directory}bronze_features_financials_{date_str.replace('-', '_')}.csv"
+        silver_filepath = f"{silver_financials_directory}silver_financials_{date_str.replace('-', '_')}.parquet"
+
+        # Check if bronze file exists before processing
+        if os.path.exists(bronze_filepath):
+            utils.data_processing_silver_table.process_silver_table(
+                'financials', bronze_filepath, silver_filepath, spark
+            )
 
     print("✅ Silver table processing completed!")
 else:
@@ -184,24 +242,44 @@ if run_gold:
     print("🥇 Processing Gold layer...")
 
     gold_label_store_directory = f"{gold_directory}label_store/"
+    gold_feature_store_directory = f"{gold_directory}feature_store/"
 
-    if not os.path.exists(gold_label_store_directory):
-        os.makedirs(gold_label_store_directory)
+    for directory in [gold_label_store_directory, gold_feature_store_directory]:
+        if not os.path.exists(directory):
+            os.makedirs(directory)
 
-    # run gold backfill
+    # Process labels (existing)
+    print("  🏷️ Processing label store...")
     for date_str in dates_str_lst:
         utils.data_processing_gold_table.process_labels_gold_table(
             date_str,
-            silver_loan_daily_directory if run_silver else f"{silver_directory}loan_daily/",
+            silver_loan_daily_directory
+            if run_silver
+            else f"{silver_directory}loan_daily/",
             gold_label_store_directory,
             spark,
             dpd=30,
             mob=6,
         )
 
+    # Process features (new)
+    print("  🎯 Processing feature store...")
+    silver_dirs = {
+        'loan_daily': f"{silver_directory}loan_daily/",
+        'attributes': f"{silver_directory}attributes/",
+        'financials': f"{silver_directory}financials/",
+        'clickstream': f"{silver_directory}clickstream/"
+    }
+
+    for date_str in dates_str_lst:
+        utils.data_processing_gold_table.process_features_gold_table(
+            date_str, silver_dirs, gold_feature_store_directory, spark
+        )
+
     folder_path = gold_label_store_directory
     files_list = [
-        folder_path + os.path.basename(f) for f in glob.glob(os.path.join(folder_path, "*"))
+        folder_path + os.path.basename(f)
+        for f in glob.glob(os.path.join(folder_path, "*"))
     ]
     df = spark.read.option("header", "true").parquet(*files_list)
     print("row_count:", df.count())

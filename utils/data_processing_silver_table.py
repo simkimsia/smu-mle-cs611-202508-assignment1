@@ -29,6 +29,41 @@ class InvalidDataStrategy(Enum):
 class ValidationMixin:
     """Mixin class providing common validation and data handling methods"""
 
+    def clean_numeric_formatting(self, df, column_name):
+        """Conservative cleaning for numeric columns - removes underscores, commas, spaces, and dollar signs"""
+        df = df.withColumn(
+            f"{column_name}_original",
+            col(column_name)  # Keep original for audit trail
+        )
+
+        # Conservative cleaning: remove common formatting characters
+        df = df.withColumn(
+            column_name,
+            F.regexp_replace(col(column_name).cast(StringType()), "[_,$\\s]", "")
+        )
+
+        return df
+
+    def validate_and_handle_categorical(self, df, column_name, acceptable_values, strategy=InvalidDataStrategy.FLAG_ONLY):
+        """Validate categorical columns against known acceptable values"""
+        # Standardize the column (uppercase, trim)
+        df = df.withColumn(
+            column_name,
+            F.when(col(column_name).isNotNull(), F.upper(F.trim(col(column_name))))
+             .otherwise(col(column_name))
+        )
+
+        # Convert acceptable values to uppercase for comparison
+        acceptable_values_upper = [val.upper() for val in acceptable_values]
+
+        # Create validation flag
+        df = df.withColumn(
+            f"valid_{column_name.lower()}",
+            col(column_name).isNotNull() & col(column_name).isin(acceptable_values_upper)
+        )
+
+        return self._handle_invalid_data(df, column_name, f"valid_{column_name.lower()}", strategy)
+
     def validate_and_handle_customer_id(self, df, strategy=InvalidDataStrategy.FLAG_ONLY, default_value=None):
         """Validate Customer_ID and handle invalid values"""
         df = df.withColumn(
@@ -50,10 +85,19 @@ class ValidationMixin:
         return self._handle_invalid_data(df, column_name, f"valid_{column_name}", strategy)
 
     def validate_and_handle_positive_amount(self, df, column_name, strategy=InvalidDataStrategy.DEFAULT_VALUE, default_value=0.0):
-        """Validate amount columns with configurable handling"""
+        """Validate amount columns that must be positive (> 0)"""
         df = df.withColumn(
             f"valid_{column_name}",
             (col(column_name).isNotNull()) & (col(column_name) > 0)
+        )
+
+        return self._handle_invalid_data(df, column_name, f"valid_{column_name}", strategy, default_value)
+
+    def validate_and_handle_non_negative_amount(self, df, column_name, strategy=InvalidDataStrategy.DEFAULT_VALUE, default_value=0.0):
+        """Validate amount columns that can be zero or positive (>= 0)"""
+        df = df.withColumn(
+            f"valid_{column_name}",
+            (col(column_name).isNotNull()) & (col(column_name) >= 0)
         )
 
         return self._handle_invalid_data(df, column_name, f"valid_{column_name}", strategy, default_value)
@@ -119,9 +163,13 @@ class BaseSilverProcessor(ABC, ValidationMixin):
         return df
 
     def apply_schema(self, df, column_type_map):
-        """Apply schema casting to dataframe"""
+        """Apply schema casting to dataframe with numeric cleaning"""
         for column, new_type in column_type_map.items():
             if column in df.columns:
+                # Clean numeric columns before casting
+                if isinstance(new_type, (FloatType, IntegerType)):
+                    df = self.clean_numeric_formatting(df, column)
+
                 df = df.withColumn(column, col(column).cast(new_type))
         return df
 
@@ -196,16 +244,16 @@ class LoanDailySilverProcessor(BaseSilverProcessor):
         }
 
     def get_validation_config(self):
-        """Strict validation for critical financial data"""
+        """Conservative validation - preserve data with flags"""
         return {
             "Customer_ID": InvalidDataStrategy.DROP_ROW,      # Critical: drop bad IDs
-            "loan_amt": InvalidDataStrategy.QUARANTINE,      # Critical: quarantine bad amounts
-            "due_amt": InvalidDataStrategy.DEFAULT_VALUE,    # Business logic: default to 0
-            "paid_amt": InvalidDataStrategy.DEFAULT_VALUE,   # Business logic: default to 0
-            "overdue_amt": InvalidDataStrategy.DEFAULT_VALUE, # Business logic: default to 0
-            "balance": InvalidDataStrategy.DEFAULT_VALUE,    # Business logic: default to 0
             "snapshot_date": InvalidDataStrategy.DROP_ROW,   # Critical: drop bad dates
-            "loan_start_date": InvalidDataStrategy.NULL_VALUE, # Allow null for missing start dates
+            "loan_amt": InvalidDataStrategy.FLAG_ONLY,       # Flag but keep for analysis
+            "due_amt": InvalidDataStrategy.FLAG_ONLY,        # Flag but keep
+            "paid_amt": InvalidDataStrategy.FLAG_ONLY,       # Flag but keep
+            "overdue_amt": InvalidDataStrategy.FLAG_ONLY,    # Flag but keep
+            "balance": InvalidDataStrategy.FLAG_ONLY,        # Flag but keep
+            "loan_start_date": InvalidDataStrategy.FLAG_ONLY, # Flag but keep
         }
 
     def apply_business_logic(self, df):
@@ -213,11 +261,17 @@ class LoanDailySilverProcessor(BaseSilverProcessor):
         # Validate financial amounts before business logic
         config = self.get_validation_config()
 
-        for amount_col in ["loan_amt", "due_amt", "paid_amt", "overdue_amt", "balance"]:
+        # loan_amt must be positive (> 0) - you can't have a $0 loan
+        if "loan_amt" in df.columns:
+            strategy = config.get("loan_amt", InvalidDataStrategy.QUARANTINE)
+            df = self.validate_and_handle_positive_amount(df, "loan_amt", strategy)
+
+        # These amounts can be zero (>= 0) - valid business cases
+        for amount_col in ["due_amt", "paid_amt", "overdue_amt", "balance"]:
             if amount_col in df.columns:
                 strategy = config.get(amount_col, InvalidDataStrategy.DEFAULT_VALUE)
                 default_val = 0.0 if strategy == InvalidDataStrategy.DEFAULT_VALUE else None
-                df = self.validate_and_handle_positive_amount(df, amount_col, strategy, default_val)
+                df = self.validate_and_handle_non_negative_amount(df, amount_col, strategy, default_val)
 
         # Add month on book
         df = df.withColumn("mob", col("installment_num").cast(IntegerType()))
@@ -371,24 +425,60 @@ class FinancialsSilverProcessor(BaseSilverProcessor):
         }
 
     def get_validation_config(self):
-        """Strict validation for credit data"""
+        """Conservative validation - flag most issues, quarantine only extreme outliers"""
         return {
             "Customer_ID": InvalidDataStrategy.DROP_ROW,           # Critical: drop bad IDs
-            "Annual_Income": InvalidDataStrategy.QUARANTINE,      # Critical: quarantine unrealistic incomes
-            "Monthly_Inhand_Salary": InvalidDataStrategy.QUARANTINE, # Critical: quarantine unrealistic salaries
-            "Interest_Rate": InvalidDataStrategy.NULL_VALUE,      # Nullify invalid rates
-            "Credit_Utilization_Ratio": InvalidDataStrategy.NULL_VALUE, # Nullify invalid ratios
-            "Outstanding_Debt": InvalidDataStrategy.DEFAULT_VALUE, # Default to 0
-            "Monthly_Balance": InvalidDataStrategy.DEFAULT_VALUE,  # Default to 0
             "snapshot_date": InvalidDataStrategy.DROP_ROW,        # Critical: drop bad dates
+            "Annual_Income": InvalidDataStrategy.FLAG_ONLY,       # Flag but keep most cases
+            "Monthly_Inhand_Salary": InvalidDataStrategy.FLAG_ONLY, # Flag but keep most cases
+            "Interest_Rate": InvalidDataStrategy.FLAG_ONLY,       # Flag but keep
+            "Credit_Utilization_Ratio": InvalidDataStrategy.FLAG_ONLY, # Flag but keep
+            "Outstanding_Debt": InvalidDataStrategy.FLAG_ONLY,    # Flag but keep
+            "Monthly_Balance": InvalidDataStrategy.FLAG_ONLY,     # Flag but keep
+            "Credit_Mix": InvalidDataStrategy.FLAG_ONLY,          # Flag but keep "_" values
+            "Payment_Behaviour": InvalidDataStrategy.FLAG_ONLY,   # Flag invalid categorical values
+            "Payment_of_Min_Amount": InvalidDataStrategy.FLAG_ONLY, # Flag invalid categorical values
+            "Type_of_Loan": InvalidDataStrategy.FLAG_ONLY,        # Flag invalid categorical values
+        }
+
+    def get_categorical_validation_rules(self):
+        """Define acceptable values for categorical fields"""
+        return {
+            "Payment_Behaviour": [
+                "High_spent_Medium_value_payments",
+                "High_spent_Small_value_payments",
+                "Low_spent_Medium_value_payments",
+                "Low_spent_Small_value_payments",
+                "High_spent_Large_value_payments",
+                "Low_spent_Large_value_payments"
+            ],
+            "Payment_of_Min_Amount": [
+                "Yes", "No"  # Valid values - NM will be flagged as invalid
+            ],
+            "Credit_Mix": [
+                "Bad", "Good", "Standard"
+            ]
         }
 
     def apply_business_logic(self, df):
         """Apply financial-specific business logic with comprehensive validation"""
         config = self.get_validation_config()
 
-        # Validate income ranges (Annual: $10K-$10M, Monthly: $1K-$1M)
+        # Handle extreme outliers for income (quarantine) vs normal validation (flag)
         if "Annual_Income" in df.columns:
+            # First, quarantine extreme outliers (< $1K or > $10M)
+            extreme_outliers = df.filter(
+                col("Annual_Income").isNotNull() &
+                ((col("Annual_Income") < 1000) | (col("Annual_Income") > 10000000))
+            )
+            if extreme_outliers.count() > 0:
+                self._quarantine_invalid_data(extreme_outliers, "Annual_Income")
+                df = df.filter(
+                    col("Annual_Income").isNull() |
+                    ((col("Annual_Income") >= 1000) & (col("Annual_Income") <= 10000000))
+                )
+
+            # Then flag remaining validation issues
             df = df.withColumn(
                 "valid_annual_income",
                 col("Annual_Income").isNotNull() &
@@ -399,11 +489,24 @@ class FinancialsSilverProcessor(BaseSilverProcessor):
                                          config.get("Annual_Income"))
 
         if "Monthly_Inhand_Salary" in df.columns:
+            # First, quarantine extreme outliers (< $100 or > $1M)
+            extreme_outliers = df.filter(
+                col("Monthly_Inhand_Salary").isNotNull() &
+                ((col("Monthly_Inhand_Salary") < 100) | (col("Monthly_Inhand_Salary") > 1000000))
+            )
+            if extreme_outliers.count() > 0:
+                self._quarantine_invalid_data(extreme_outliers, "Monthly_Inhand_Salary")
+                df = df.filter(
+                    col("Monthly_Inhand_Salary").isNull() |
+                    ((col("Monthly_Inhand_Salary") >= 100) & (col("Monthly_Inhand_Salary") <= 1000000))
+                )
+
+            # Then flag remaining validation issues
             df = df.withColumn(
                 "valid_monthly_salary",
                 col("Monthly_Inhand_Salary").isNotNull() &
                 (col("Monthly_Inhand_Salary") >= 1000) &
-                (col("Monthly_Inhand_Salary") <= 1000000)
+                (col("Monthly_Inhand_Salary") <= 100000)
             )
             df = self._handle_invalid_data(df, "Monthly_Inhand_Salary", "valid_monthly_salary",
                                          config.get("Monthly_Inhand_Salary"))
@@ -430,22 +533,50 @@ class FinancialsSilverProcessor(BaseSilverProcessor):
             df = self._handle_invalid_data(df, "Interest_Rate", "valid_interest_rate",
                                          config.get("Interest_Rate"))
 
-        # Validate positive amounts with defaults
+        # Validate non-negative amounts with defaults (these can be zero)
         for amount_col in ["Outstanding_Debt", "Monthly_Balance", "Total_EMI_per_month", "Amount_invested_monthly"]:
             if amount_col in df.columns:
                 strategy = config.get(amount_col, InvalidDataStrategy.DEFAULT_VALUE)
                 default_val = 0.0 if strategy == InvalidDataStrategy.DEFAULT_VALUE else None
-                df = self.validate_and_handle_positive_amount(df, amount_col, strategy, default_val)
+                df = self.validate_and_handle_non_negative_amount(df, amount_col, strategy, default_val)
 
-        # Standardize categorical fields
-        categorical_cols = ["Credit_Mix", "Payment_of_Min_Amount", "Payment_Behaviour", "Type_of_Loan"]
-        for cat_col in categorical_cols:
-            if cat_col in df.columns:
-                df = df.withColumn(
-                    cat_col,
-                    F.when(col(cat_col).isNotNull(), F.upper(F.trim(col(cat_col))))
-                     .otherwise(col(cat_col))
-                )
+        # Validate categorical fields with known acceptable values
+        categorical_rules = self.get_categorical_validation_rules()
+
+        for column_name, acceptable_values in categorical_rules.items():
+            if column_name in df.columns:
+                # Special handling for Credit_Mix: convert "_" to null first
+                if column_name == "Credit_Mix":
+                    df = df.withColumn(
+                        column_name,
+                        F.when(col(column_name) == "_", F.lit(None))
+                         .otherwise(col(column_name))
+                    )
+
+                # Apply categorical validation
+                strategy = config.get(column_name, InvalidDataStrategy.FLAG_ONLY)
+                df = self.validate_and_handle_categorical(df, column_name, acceptable_values, strategy)
+
+        # Handle Type_of_Loan - light touch approach for messy multi-value field
+        if "Type_of_Loan" in df.columns:
+            df = df.withColumn(
+                "Type_of_Loan",
+                F.when(col("Type_of_Loan") == "", F.lit(None))  # Empty string → null
+                 .when(col("Type_of_Loan").isNotNull(), F.trim(col("Type_of_Loan")))  # Just trim
+                 .otherwise(col("Type_of_Loan"))
+            )
+
+            # Add completeness and usefulness flag
+            df = df.withColumn(
+                "valid_type_of_loan",
+                col("Type_of_Loan").isNotNull() &
+                (col("Type_of_Loan") != "Not Specified") &
+                (F.length(col("Type_of_Loan")) > 0)
+            )
+
+            # Apply FLAG_ONLY strategy for data quality tracking
+            strategy = config.get("Type_of_Loan", InvalidDataStrategy.FLAG_ONLY)
+            df = self._handle_invalid_data(df, "Type_of_Loan", "valid_type_of_loan", strategy)
 
         return df
 
@@ -492,7 +623,7 @@ def process_silver_table(table_type, bronze_filepath, silver_filepath, spark):
 def process_silver_table_legacy(snapshot_date_str, bronze_lms_directory, silver_loan_daily_directory, spark):
     """Legacy function for backwards compatibility - processes loan daily data only"""
     # Build file paths
-    bronze_filename = f"bronze_loan_daily_{snapshot_date_str.replace('-','_')}.csv"
+    bronze_filename = f"bronze_lms_loan_daily_{snapshot_date_str.replace('-','_')}.csv"
     bronze_filepath = os.path.join(bronze_lms_directory, bronze_filename)
 
     silver_filename = f"silver_loan_daily_{snapshot_date_str.replace('-','_')}.parquet"
