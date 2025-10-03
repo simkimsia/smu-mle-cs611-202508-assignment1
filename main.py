@@ -93,8 +93,8 @@ print(dates_str_lst)
 
 # Determine which layers to run based on arguments
 run_bronze = not args.layer or args.layer == "bronze"
-run_silver = not args.layer or args.layer in ["bronze", "silver"]
-run_gold = not args.layer or args.layer in ["bronze", "silver", "gold"]
+run_silver = not args.layer or args.layer == "silver"
+run_gold = not args.layer or args.layer == "gold"
 
 print("🔄 Pipeline execution plan:")
 print(f"  Bronze: {'✓' if run_bronze else '⏩ Skip'}")
@@ -190,7 +190,7 @@ if run_silver:
     bronze_lms_directory = f"{bronze_directory}lms/"
     for date_str in dates_str_lst:
         utils.data_processing_silver_table.process_silver_table_legacy(
-            date_str, bronze_lms_directory, silver_loan_daily_directory, spark
+            date_str, bronze_lms_directory, silver_loan_daily_directory, spark, base_datamart_dir
         )
 
     # Process clickstream data
@@ -203,7 +203,7 @@ if run_silver:
         # Check if bronze file exists before processing
         if os.path.exists(bronze_filepath):
             utils.data_processing_silver_table.process_silver_table(
-                'clickstream', bronze_filepath, silver_filepath, spark
+                'clickstream', bronze_filepath, silver_filepath, spark, base_datamart_dir
             )
 
     # Process attributes data
@@ -216,7 +216,7 @@ if run_silver:
         # Check if bronze file exists before processing
         if os.path.exists(bronze_filepath):
             utils.data_processing_silver_table.process_silver_table(
-                'attributes', bronze_filepath, silver_filepath, spark
+                'attributes', bronze_filepath, silver_filepath, spark, base_datamart_dir
             )
 
     # Process financials data
@@ -229,7 +229,7 @@ if run_silver:
         # Check if bronze file exists before processing
         if os.path.exists(bronze_filepath):
             utils.data_processing_silver_table.process_silver_table(
-                'financials', bronze_filepath, silver_filepath, spark
+                'financials', bronze_filepath, silver_filepath, spark, base_datamart_dir
             )
 
     print("✅ Silver table processing completed!")
@@ -253,9 +253,7 @@ if run_gold:
     for date_str in dates_str_lst:
         utils.data_processing_gold_table.process_labels_gold_table(
             date_str,
-            silver_loan_daily_directory
-            if run_silver
-            else f"{silver_directory}loan_daily/",
+            f"{silver_directory}loan_daily/",
             gold_label_store_directory,
             spark,
             dpd=30,

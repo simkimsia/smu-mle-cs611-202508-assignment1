@@ -15,7 +15,17 @@ def process_bronze_table(
 
     # apply date filtering if the column exists
     if date_filter_column in df.columns:
-        df = df.filter(col(date_filter_column) == snapshot_date)
+        # Convert snapshot_date column to standard date format for comparison
+        # Handle both yyyy-MM-dd and d/M/yy formats
+        from pyspark.sql.functions import to_date, coalesce
+        df = df.withColumn(
+            date_filter_column,
+            coalesce(
+                to_date(col(date_filter_column), 'yyyy-MM-dd'),
+                to_date(col(date_filter_column), 'd/M/yy')
+            )
+        )
+        df = df.filter(col(date_filter_column) == snapshot_date_str)
 
     print(f"{file_path} - {snapshot_date_str} row count: {df.count()}")
 

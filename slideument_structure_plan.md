@@ -125,6 +125,7 @@ if salary > 10M: quarantine()  # Only quarantine obvious errors
   - Financial data: Strict validation for critical fields, flagging for analysis fields
   - Clickstream: Lenient defaults (missing clicks = 0)
   - Demographics: Flag edge cases but preserve for ML feature engineering
+  - **Data Preservation Philosophy**: Keep SSN and Name in silver for data lineage, exclude from gold for ML
 - **Extensibility**: Easy to add new data sources or modify validation rules per processor
 
 ### Technical Architecture Box
@@ -151,8 +152,17 @@ BaseSilverProcessor (ABC)
 ## Slide 7: Gold Layer: ML-Ready Feature & Label Stores
 
 ### Content
-- **Feature Store Design**: Time-series features joined on Customer_ID with mob=6 filtering
-- **Label Store Logic**: Binary classification (1=default at 30+ DPD, 0=performing)
+- **Feature Store Design**: Time-series features joined on Customer_ID with mob=0 (application time)
+- **Label Store Logic**: Binary classification (1=default at 30+ DPD at mob=6, 0=performing)
+- **Feature Selection Strategy**:
+  - Exclude non-predictive identifiers (SSN, Name, valid_ssn, valid_credit_mix, Credit_History_Age, Type_of_Loan) from gold layer
+  - Keep raw Age (continuous) for tree-based models - simpler for baseline model training
+  - Age bucketing deferred to v2 based on feature importance analysis (if important but non-linear then bucket)
+  - Credit_History_Age parsing: Convert "10 Years and 9 Months" format to Credit_History_Age_Months (integer) in silver layer for ML compatibility - only the integer version flows to gold
+  - Payment_Behavior feature engineering: Extract spending_level (binary) and value_size (ordinal 0-2) to reduce cardinality while preserving information
+  - Payment_of_Min_Amount one-hot encoding: Convert YES/NO/NM into payment_min_yes (binary) and payment_min_nm (binary) with NO as reference category - avoids ordinal assumption since no clear ordering between YES and NM
+  - Credit_Mix one-hot encoding: Convert GOOD/STANDARD/BAD/missing into credit_mix_good, credit_mix_standard, credit_mix_bad (all binary) with missing (~20% of data) as reference category - treats missing as legitimate category with potential predictive signal
+  - Type_of_Loan multi-label binarization: Convert comma-separated loan types (e.g., "Payday Loan, Mortgage Loan") into binary indicators (has_payday_loan, has_mortgage_loan, etc.) - automatically extracts all unique loan types from data, ignores duplicates, and creates has_any_loan summary feature
 - **ML Compatibility**:
   - Point-in-time correctness (no future leakage)
   - Consistent schema across time periods

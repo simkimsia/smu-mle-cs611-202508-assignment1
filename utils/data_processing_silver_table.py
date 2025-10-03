@@ -139,7 +139,12 @@ class ValidationMixin:
 
     def _quarantine_invalid_data(self, invalid_df, column_name):
         """Save invalid data to quarantine location"""
-        quarantine_path = f"datamart/quarantine/{self.__class__.__name__}_{column_name}"
+        # Ensure quarantine goes inside the timestamped datamart directory
+        quarantine_path = f"{self.base_datamart_dir}quarantine/{self.__class__.__name__}_{column_name}"
+
+        # Create quarantine directory if it doesn't exist
+        os.makedirs(os.path.dirname(quarantine_path), exist_ok=True)
+
         invalid_df.write.mode("append").parquet(quarantine_path)
         print(f"Quarantined {invalid_df.count()} invalid records to {quarantine_path}")
 
@@ -147,8 +152,9 @@ class ValidationMixin:
 class BaseSilverProcessor(ABC, ValidationMixin):
     """Base class for silver table processors with common functionality"""
 
-    def __init__(self, spark):
+    def __init__(self, spark, base_datamart_dir="datamart/"):
         self.spark = spark
+        self.base_datamart_dir = base_datamart_dir
 
     def load_bronze_data(self, bronze_filepath):
         """Load data from bronze layer"""
@@ -170,7 +176,26 @@ class BaseSilverProcessor(ABC, ValidationMixin):
                 if isinstance(new_type, (FloatType, IntegerType)):
                     df = self.clean_numeric_formatting(df, column)
 
-                df = df.withColumn(column, col(column).cast(new_type))
+                # Parse date columns with proper format handling
+                if isinstance(new_type, DateType):
+                    df = self._parse_date_column(df, column)
+                else:
+                    df = df.withColumn(column, col(column).cast(new_type))
+        return df
+
+    def _parse_date_column(self, df, column_name):
+        """Parse date column handling multiple formats (d/M/yy and yyyy-MM-dd)"""
+        # Try to parse common date formats
+        # Format 1: d/M/yy (e.g., "1/5/23" = May 1, 2023)
+        # Format 2: yyyy-MM-dd (e.g., "2023-01-01")
+        df = df.withColumn(
+            column_name,
+            F.coalesce(
+                F.to_date(col(column_name), "d/M/yy"),      # Try d/M/yy first
+                F.to_date(col(column_name), "yyyy-MM-dd"),  # Then yyyy-MM-dd
+                F.to_date(col(column_name))                 # Finally default parsing
+            )
+        )
         return df
 
     def get_validation_config(self):
@@ -377,12 +402,16 @@ class AttributesSilverProcessor(BaseSilverProcessor):
             )
 
         # Validate SSN format (assuming XXX-XX-XXXX format)
+        # Keep in silver for data lineage, exclude from gold for ML
         if "SSN" in df.columns:
             df = df.withColumn(
                 "valid_ssn",
                 col("SSN").rlike("^\\d{3}-\\d{2}-\\d{4}$")
             )
             # Just flag, don't modify SSN data
+
+        # Name kept in silver for data lineage
+        # Will be excluded from gold layer (no predictive value)
 
         # Standardize occupation values
         if "Occupation" in df.columns:
@@ -578,6 +607,104 @@ class FinancialsSilverProcessor(BaseSilverProcessor):
             strategy = config.get("Type_of_Loan", InvalidDataStrategy.FLAG_ONLY)
             df = self._handle_invalid_data(df, "Type_of_Loan", "valid_type_of_loan", strategy)
 
+            # ============================================================================
+            # FEATURE ENGINEERING: Type_of_Loan Multi-Label Binarization
+            # - Extract unique loan types from comma-separated values
+            # - Create binary indicator columns (has_payday_loan, has_mortgage_loan, etc.)
+            # - Ignore duplicates (e.g., "Payday Loan, Payday Loan" → has_payday_loan=1)
+            # - Exclude "Not Specified" as it's metadata, not a real loan type
+            # - Separators handled: ", " and " and "
+            # ============================================================================
+
+            # Extract all unique loan types from the data
+            unique_loan_types_df = df.select("Type_of_Loan") \
+                .filter(col("Type_of_Loan").isNotNull()) \
+                .distinct() \
+                .collect()
+
+            # Parse all unique loan types
+            all_loan_types_set = set()
+            for row in unique_loan_types_df:
+                if row["Type_of_Loan"]:
+                    value = row["Type_of_Loan"]
+                    # Split by both ", " and " and "
+                    loans = value.replace(' and ', ',').split(',')
+                    # Clean whitespace and filter out "Not Specified"
+                    loans = [loan.strip() for loan in loans
+                            if loan.strip() and loan.strip() != 'Not Specified' and 'Loan' in loan.strip()]
+                    all_loan_types_set.update(loans)
+
+            unique_loan_types = sorted(all_loan_types_set)
+            print(f"Found {len(unique_loan_types)} unique loan types: {unique_loan_types}")
+
+            # Create binary columns for each loan type
+            for loan_type in unique_loan_types:
+                feature_name = f"has_{loan_type.lower().replace(' ', '_').replace('-', '_')}"
+                # Use regexp to check if loan type exists (handles separators automatically)
+                # Wrap in word boundaries to avoid partial matches
+                df = df.withColumn(
+                    feature_name,
+                    F.when(
+                        col("Type_of_Loan").isNotNull() &
+                        col("Type_of_Loan").rlike(f"\\b{loan_type}\\b"),
+                        1
+                    ).otherwise(0)
+                )
+
+            # Add derived features for loan type analysis
+            # has_any_loan: 1 if user has any valid loan type, 0 otherwise
+            df = df.withColumn(
+                "has_any_loan",
+                F.when(
+                    col("Type_of_Loan").isNotNull() &
+                    (col("Type_of_Loan") != "Not Specified") &
+                    (F.length(col("Type_of_Loan")) > 0),
+                    1
+                ).otherwise(0)
+            )
+
+            print(f"Created {len(unique_loan_types)} binary loan type features + has_any_loan")
+
+        # Parse Credit_History_Age from string format to integer months
+        # Example: "10 Years and 9 Months" → 129 months
+        if "Credit_History_Age" in df.columns:
+            # Extract years and months using regex
+            # Pattern: "(\d+) Years and (\d+) Months" or "(\d+) Year and (\d+) Month" (singular)
+            # Also handle edge cases: "10 Years", "5 Months", etc.
+
+            # Extract years (defaults to 0 if not present)
+            df = df.withColumn(
+                "years_part",
+                F.regexp_extract(col("Credit_History_Age"), r"(\d+)\s+Years?", 1).cast(IntegerType())
+            )
+
+            # Extract months (defaults to 0 if not present)
+            df = df.withColumn(
+                "months_part",
+                F.regexp_extract(col("Credit_History_Age"), r"(\d+)\s+Months?", 1).cast(IntegerType())
+            )
+
+            # Calculate total months: (years * 12) + months
+            # Handle nulls: if both parts are null/0, result is null (invalid data)
+            df = df.withColumn(
+                "Credit_History_Age_Months",
+                F.when(
+                    col("Credit_History_Age").isNotNull(),
+                    F.coalesce(col("years_part"), F.lit(0)) * 12 + F.coalesce(col("months_part"), F.lit(0))
+                ).otherwise(F.lit(None)).cast(IntegerType())
+            )
+
+            # Add validation flag
+            df = df.withColumn(
+                "valid_credit_history_age",
+                col("Credit_History_Age_Months").isNotNull() &
+                (col("Credit_History_Age_Months") >= 0) &
+                (col("Credit_History_Age_Months") <= 600)  # Max 50 years seems reasonable
+            )
+
+            # Drop temporary columns
+            df = df.drop("years_part", "months_part")
+
         return df
 
 
@@ -592,12 +719,12 @@ class SilverProcessorFactory:
     }
 
     @classmethod
-    def get_processor(cls, table_type, spark):
+    def get_processor(cls, table_type, spark, base_datamart_dir="datamart/"):
         """Get processor instance for the given table type"""
         processor_class = cls._processors.get(table_type)
         if not processor_class:
             raise ValueError(f"No processor found for table type: {table_type}")
-        return processor_class(spark)
+        return processor_class(spark, base_datamart_dir)
 
     @classmethod
     def get_available_processors(cls):
@@ -605,7 +732,7 @@ class SilverProcessorFactory:
         return list(cls._processors.keys())
 
 
-def process_silver_table(table_type, bronze_filepath, silver_filepath, spark):
+def process_silver_table(table_type, bronze_filepath, silver_filepath, spark, base_datamart_dir="datamart/"):
     """
     Process a bronze table to silver using the appropriate processor
 
@@ -614,13 +741,14 @@ def process_silver_table(table_type, bronze_filepath, silver_filepath, spark):
         bronze_filepath: Path to bronze table file
         silver_filepath: Path to save silver table
         spark: Spark session
+        base_datamart_dir: Base datamart directory for quarantine files
     """
-    processor = SilverProcessorFactory.get_processor(table_type, spark)
+    processor = SilverProcessorFactory.get_processor(table_type, spark, base_datamart_dir)
     return processor.process(bronze_filepath, silver_filepath)
 
 
 # Backwards compatibility function
-def process_silver_table_legacy(snapshot_date_str, bronze_lms_directory, silver_loan_daily_directory, spark):
+def process_silver_table_legacy(snapshot_date_str, bronze_lms_directory, silver_loan_daily_directory, spark, base_datamart_dir="datamart/"):
     """Legacy function for backwards compatibility - processes loan daily data only"""
     # Build file paths
     bronze_filename = f"bronze_lms_loan_daily_{snapshot_date_str.replace('-','_')}.csv"
@@ -630,4 +758,4 @@ def process_silver_table_legacy(snapshot_date_str, bronze_lms_directory, silver_
     silver_filepath = os.path.join(silver_loan_daily_directory, silver_filename)
 
     # Process using new modular approach
-    return process_silver_table('loan_daily', bronze_filepath, silver_filepath, spark)
+    return process_silver_table('loan_daily', bronze_filepath, silver_filepath, spark, base_datamart_dir)

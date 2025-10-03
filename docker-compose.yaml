@@ -25,3 +25,19 @@ services:
       - .:/app
     command: ["python", "main.py"]
     profiles: ["etl"]
+
+  etl-silver:
+    build: .
+    container_name: etl_silver_only
+    volumes:
+      - .:/app
+    command: ["python", "main.py", "--layer", "silver", "--timestamp", "${TIMESTAMP}"]
+    profiles: ["etl"]
+
+  etl-gold:
+    build: .
+    container_name: etl_gold_only
+    volumes:
+      - .:/app
+    command: ["python", "main.py", "--layer", "gold", "--timestamp", "${TIMESTAMP}"]
+    profiles: ["etl"]

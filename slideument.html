@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ETL Data Pipeline for Loan Default Prediction</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@4.5.0/dist/reset.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@4.5.0/dist/reveal.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@4.5.0/dist/theme/black.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@4.5.0/plugin/highlight/monokai.css">
+    <style>
+        :root {
+            --primary: #667eea;
+            --secondary: #764ba2;
+            --accent: #f093fb;
+            --success: #4facfe;
+            --warning: #fa709a;
+        }
+
+        .reveal {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 28px;
+        }
+
+        .reveal h1, .reveal h2, .reveal h3 {
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            text-transform: none;
+            font-weight: 700;
+        }
+
+        .reveal h1 { font-size: 1.8em; margin-bottom: 0.3em; }
+        .reveal h2 { font-size: 1.5em; margin-bottom: 0.4em; }
+        .reveal h3 { font-size: 1.1em; margin-bottom: 0.3em; }
+
+        .slide-subtitle {
+            font-size: 0.9em;
+            color: #aaa;
+            font-style: italic;
+            margin-top: -0.3em;
+            margin-bottom: 1em;
+        }
+
+        .reveal .slides section {
+            text-align: left;
+            padding: 20px;
+        }
+
+        .reveal p {
+            font-size: 0.85em;
+            margin: 0.4em 0;
+        }
+
+        .reveal ul, .reveal ol {
+            font-size: 0.85em;
+        }
+
+        .reveal li {
+            margin: 0.3em 0;
+        }
+
+        .card {
+            background: rgba(102, 126, 234, 0.1);
+            border-left: 4px solid var(--primary);
+            padding: 12px 15px;
+            margin: 12px 0;
+            border-radius: 8px;
+            backdrop-filter: blur(10px);
+        }
+
+        .card-success {
+            border-left-color: var(--success);
+            background: rgba(79, 172, 254, 0.1);
+        }
+
+        .card-warning {
+            border-left-color: var(--warning);
+            background: rgba(250, 112, 154, 0.1);
+        }
+
+        .architecture-flow {
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            margin: 15px 0;
+            flex-wrap: wrap;
+        }
+
+        .layer-box {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            padding: 12px 18px;
+            border-radius: 10px;
+            margin: 8px;
+            min-width: 120px;
+            text-align: center;
+            box-shadow: 0 6px 15px rgba(0,0,0,0.3);
+            position: relative;
+            font-size: 0.85em;
+        }
+
+        .layer-box::after {
+            content: '→';
+            position: absolute;
+            right: -25px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 1.5em;
+            color: var(--accent);
+        }
+
+        .layer-box:last-child::after {
+            content: '';
+        }
+
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 10px;
+            margin: 12px 0;
+        }
+
+        .feature-item {
+            background: rgba(118, 75, 162, 0.2);
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid var(--accent);
+            font-size: 0.8em;
+        }
+
+        .feature-item strong {
+            color: var(--accent);
+        }
+
+        .metric {
+            display: inline-block;
+            background: linear-gradient(135deg, var(--success), var(--primary));
+            padding: 6px 12px;
+            border-radius: 15px;
+            margin: 6px;
+            font-weight: bold;
+            font-size: 0.75em;
+        }
+
+        .code-highlight {
+            background: rgba(0,0,0,0.5);
+            padding: 12px;
+            border-radius: 8px;
+            border-left: 4px solid var(--success);
+            font-size: 0.65em;
+            margin: 10px 0;
+        }
+
+        ul.checkmarks li {
+            list-style: none;
+            padding-left: 25px;
+            position: relative;
+            margin: 8px 0;
+        }
+
+        ul.checkmarks li::before {
+            content: '✓';
+            position: absolute;
+            left: 0;
+            color: var(--success);
+            font-weight: bold;
+            font-size: 1.2em;
+        }
+
+        .timeline {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin: 15px 0;
+            position: relative;
+        }
+
+        .timeline::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: var(--accent);
+            z-index: -1;
+        }
+
+        .timeline-point {
+            background: var(--primary);
+            padding: 10px;
+            border-radius: 50%;
+            min-width: 65px;
+            min-height: 65px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.5);
+            font-size: 0.75em;
+        }
+
+        .data-source {
+            background: rgba(79, 172, 254, 0.15);
+            padding: 10px 12px;
+            margin: 8px 0;
+            border-radius: 8px;
+            border-left: 3px solid var(--success);
+            font-size: 0.85em;
+        }
+
+        .strategy-badge {
+            display: inline-block;
+            background: var(--secondary);
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.7em;
+            margin: 4px;
+        }
+
+        .key-insight {
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.2), rgba(240, 147, 251, 0.2));
+            border: 2px solid var(--accent);
+            padding: 10px 15px;
+            border-radius: 10px;
+            margin: 10px 0;
+            font-weight: bold;
+            font-size: 0.9em;
+        }
+
+        .technical-detail {
+            background: rgba(0,0,0,0.3);
+            border-left: 3px solid var(--primary);
+            padding: 8px 12px;
+            margin: 8px 0;
+            font-size: 0.75em;
+            border-radius: 4px;
+        }
+
+        .business-value {
+            background: linear-gradient(135deg, rgba(79, 172, 254, 0.2), rgba(102, 126, 234, 0.2));
+            border-left: 4px solid var(--success);
+            padding: 10px 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+        }
+
+        .business-value::before {
+            content: '💡 ';
+            font-size: 1.2em;
+        }
+
+        .section-label {
+            display: inline-block;
+            background: var(--accent);
+            color: #000;
+            padding: 3px 10px;
+            border-radius: 15px;
+            font-size: 0.7em;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .code-label {
+            display: inline-block;
+            background: var(--warning);
+            color: #000;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.65em;
+            font-weight: bold;
+            margin-bottom: 3px;
+        }
+
+        .code-label.actual {
+            background: var(--success);
+        }
+
+        .plain-english {
+            background: rgba(240, 147, 251, 0.15);
+            padding: 8px 12px;
+            border-radius: 6px;
+            margin: 8px 0;
+            font-size: 0.8em;
+            border-left: 3px solid var(--accent);
+        }
+    </style>
+</head>
+<body>
+    <div class="reveal">
+        <div class="slides">
+
+            <!-- Slide 1: Executive Summary -->
+            <section>
+                <h1>ETL Data Pipeline for Loan Default Prediction</h1>
+                <div class="card card-success">
+                    <h3>Business Problem</h3>
+                    <p>Financial institute needs ML-ready data for loan default prediction and risk management</p>
+                </div>
+
+                <div class="architecture-flow">
+                    <div class="layer-box">Raw CSVs</div>
+                    <div class="layer-box">Bronze</div>
+                    <div class="layer-box">Silver</div>
+                    <div class="layer-box">Gold</div>
+                    <div class="layer-box">ML Models</div>
+                </div>
+
+                <ul class="checkmarks">
+                    <li>Production-grade ETL pipeline following Medallion Architecture</li>
+                    <li>Processing 24 months of data across 4 data sources</li>
+                    <li>Enable data-driven loan decisions and risk management</li>
+                </ul>
+            </section>
+
+            <!-- Slide 2: Medallion Architecture -->
+            <section>
+                <h2>Data Strategy & Architecture</h2>
+                <p class="slide-subtitle">Building trust through progressive data refinement</p>
+
+                <div class="plain-english">
+                    <strong>In Plain English:</strong> We process data in three stages, each improving quality—like refining raw ore into pure gold.
+                </div>
+
+                <div style="margin-top: 15px;">
+                    <div class="data-source">
+                        <strong>🥉 Bronze:</strong> Store raw data exactly as received (audit trail)
+                    </div>
+                    <div class="data-source">
+                        <strong>🥈 Silver:</strong> Clean & validate data (fix errors, standardize formats)
+                    </div>
+                    <div class="data-source">
+                        <strong>🥇 Gold:</strong> Business-ready data (optimized for ML models)
+                    </div>
+                </div>
+
+                <div class="business-value">
+                    <strong>Business Value:</strong> Each layer has clear purpose—bronze for compliance, silver for quality, gold for ML
+                </div>
+
+                <div class="technical-detail">
+                    <span class="section-label">TECHNICAL</span>
+                    PySpark for distributed processing + Parquet for columnar storage & schema evolution
+                </div>
+            </section>
+
+            <!-- Slide 3: Business Logic -->
+            <section>
+                <h2>Prediction Framework</h2>
+                <p class="slide-subtitle">When and how do we predict loan defaults?</p>
+
+                <div class="plain-english">
+                    <strong>The Question:</strong> At loan application time (Month 0), can we predict if the customer will default 6 months later?
+                </div>
+
+                <div class="timeline">
+                    <div class="timeline-point">
+                        <strong>Month 0</strong><br>
+                        <small>Apply for loan</small>
+                    </div>
+                    <div class="timeline-point">
+                        <strong>Month 6</strong><br>
+                        <small>Observe outcome</small>
+                    </div>
+                    <div class="timeline-point">
+                        <strong>30+ DPD</strong><br>
+                        <small>= Default</small>
+                    </div>
+                </div>
+
+                <div class="key-insight">
+                    ⚠️ Default = 30+ Days Past Due (DPD) at Month 6 — this is our prediction target
+                </div>
+
+                <div class="feature-grid" style="margin-top: 12px;">
+                    <div class="feature-item">📊 Demographics</div>
+                    <div class="feature-item">💰 Financials</div>
+                    <div class="feature-item">🖱️ Clickstream</div>
+                    <div class="feature-item">📈 Loan History</div>
+                </div>
+
+                <div class="business-value">
+                    <strong>Why Month 6?</strong> Data shows default patterns stabilize at this point—early enough to act, late enough to be reliable
+                </div>
+            </section>
+
+            <!-- Slide 4: Data Sources -->
+            <section>
+                <h2>Data Sources & Integration</h2>
+                <p class="slide-subtitle">What data do we have to work with?</p>
+
+                <div class="plain-english">
+                    <strong>The Challenge:</strong> Data lives in 4 separate files. We need to combine them by matching customer IDs.
+                </div>
+
+                <div class="data-source">
+                    <strong>📈 lms_loan_daily.csv</strong><br>
+                    Loan performance over time (137K+ records - tracks each loan by month)
+                </div>
+
+                <div class="data-source">
+                    <strong>💰 features_financials.csv</strong><br>
+                    Credit scores & income (12,500 customers - one snapshot per person)
+                </div>
+
+                <div class="data-source">
+                    <strong>👤 features_attributes.csv</strong><br>
+                    Age, occupation, family status (12,500 customers - one snapshot per person)
+                </div>
+
+                <div class="data-source">
+                    <strong>🖱️ feature_clickstream.csv</strong><br>
+                    Website activity (215K+ records across 8K+ customers - monthly snapshots)
+                </div>
+
+                <div class="business-value">
+                    <strong>Integration Strategy:</strong> Match all data by Customer_ID, keeping all loan records even if some customer data is missing (left join)
+                </div>
+            </section>
+
+            <!-- Slide 5: Modular Validation -->
+            <section>
+                <h2>Data Quality Strategy</h2>
+                <p class="slide-subtitle">How do we handle imperfect data?</p>
+
+                <div class="plain-english">
+                    <strong>The Challenge:</strong> Real-world data is messy. Do we delete bad records or try to save them?
+                </div>
+
+                <div class="key-insight">
+                    💡 Our Philosophy: "Flag but Preserve" — Keep data for ML training, but mark quality issues
+                </div>
+
+                <div class="feature-grid">
+                    <div class="feature-item">
+                        <span class="strategy-badge">FLAG_ONLY</span><br>
+                        Mark issue, keep data
+                    </div>
+                    <div class="feature-item">
+                        <span class="strategy-badge">DROP_ROW</span><br>
+                        Delete if critical
+                    </div>
+                    <div class="feature-item">
+                        <span class="strategy-badge">QUARANTINE</span><br>
+                        Isolate extreme outliers
+                    </div>
+                    <div class="feature-item">
+                        <span class="strategy-badge">DEFAULT_VALUE</span><br>
+                        Fill missing values
+                    </div>
+                </div>
+
+                <div class="business-value">
+                    <strong>Why This Matters:</strong> Maximizes ML training data while maintaining transparency about data quality
+                </div>
+
+                <div class="technical-detail">
+                    <span class="section-label">TECHNICAL</span>
+                    <span class="code-label">SIMPLIFIED</span> (actual code in utils/data_processing_silver_table.py:20-26, 96-103, 132-136)
+                    <pre style="margin: 5px 0; font-size: 0.7em;"><code class="python"># Enum definition (lines 20-26)
+class InvalidDataStrategy(Enum):
+    FLAG_ONLY = "flag_only"    # Keep record, add validation flag
+    DROP_ROW = "drop_row"       # Remove entire record
+    QUARANTINE = "quarantine"   # Move to separate table
+
+# Usage example: Conservative approach
+df = validate_and_handle_non_negative_amount(
+    df, "Annual_Income", strategy=InvalidDataStrategy.FLAG_ONLY
+)
+
+# Quarantine logic handles extreme outliers (lines 132-136)</code></pre>
+                </div>
+            </section>
+
+            <!-- Slide 6: Silver Layer -->
+            <section>
+                <h2>Silver Layer: Modular Processing</h2>
+
+                <div class="code-highlight">
+                    <pre><code class="text">BaseSilverProcessor (ABC)
+├── ValidationMixin (data quality methods)
+├── LoanDailySilverProcessor (strict financial)
+├── FinancialsSilverProcessor (conservative + quarantine)
+├── AttributesSilverProcessor (moderate validation)
+└── ClickstreamSilverProcessor (lenient defaults)</code></pre>
+                </div>
+
+                <div class="card card-success">
+                    <h3>Data Handling Philosophy</h3>
+                    <ul>
+                        <li><strong>Financial:</strong> Strict validation for critical fields, flagging for analysis</li>
+                        <li><strong>Clickstream:</strong> Lenient defaults (missing clicks = 0)</li>
+                        <li><strong>Demographics:</strong> Flag edge cases but preserve for ML</li>
+                        <li><strong>Data Lineage:</strong> Keep SSN/Name in silver, exclude from gold</li>
+                    </ul>
+                </div>
+
+                <ul class="checkmarks">
+                    <li>Clean, extensible architecture with SilverProcessorFactory</li>
+                    <li>Data-source-specific validation rules</li>
+                    <li>Easy to add new data sources</li>
+                </ul>
+            </section>
+
+            <!-- Slide 7: Gold Layer -->
+            <section>
+                <h2>Gold Layer: ML-Ready Stores</h2>
+
+                <div class="card card-success">
+                    <h3>Feature Store Design</h3>
+                    <p>Time-series features joined on <strong>Customer_ID</strong> with <strong>mob=0</strong> (application time)</p>
+                </div>
+
+                <div class="card">
+                    <h3>Feature Engineering Highlights</h3>
+                    <ul style="font-size: 0.85em;">
+                        <li><strong>Credit_History_Age:</strong> "10 Years 9 Months" → Credit_History_Age_Months (integer)</li>
+                        <li><strong>Payment_Behavior:</strong> Extract spending_level (binary) + value_size (ordinal 0-2)</li>
+                        <li><strong>Payment_of_Min_Amount:</strong> One-hot encode YES/NO/NM</li>
+                        <li><strong>Credit_Mix:</strong> GOOD/STANDARD/BAD with missing as reference</li>
+                        <li><strong>Type_of_Loan:</strong> Multi-label binarization (has_payday_loan, has_mortgage_loan, etc.)</li>
+                    </ul>
+                </div>
+
+                <div class="card card-warning">
+                    <h3>Label Store Logic</h3>
+                    <p><strong>Binary classification:</strong> 1 = default (30+ DPD at mob=6), 0 = performing</p>
+                </div>
+
+                <ul class="checkmarks">
+                    <li>Point-in-time correctness (no future leakage)</li>
+                    <li>Incremental processing with date-based partitioning</li>
+                </ul>
+            </section>
+
+            <!-- Slide 8: Data Leakage Prevention - Attributes & Financials -->
+            <section>
+                <h2>Preventing Data Leakage #1</h2>
+                <p class="slide-subtitle">Making sure we don't "cheat" by using future information</p>
+
+                <div class="plain-english">
+                    <strong>The Problem:</strong> Customer info changes over time. If we use 2024 data to predict a 2023 loan, we're cheating—using information we didn't have yet!
+                </div>
+
+                <div class="key-insight">
+                    ⏰ Rule: Only use customer data that existed AT or BEFORE loan application time (Month 0)
+                </div>
+
+                <div class="business-value">
+                    <strong>Why This Matters:</strong> Ensures model predictions are realistic—we only use information that would have been available when making the actual loan decision
+                </div>
+
+                <div class="technical-detail">
+                    <span class="section-label">TECHNICAL</span>
+                    <span class="code-label">SIMPLIFIED</span> (actual code in utils/data_processing_gold_table.py:92, 258-265)
+                    <pre style="margin: 5px 0; font-size: 0.75em;"><code class="python"># 1. Filter to Month 0 (application time)
+df_features = loan_daily.filter(col("mob") == 0)
+
+# 2. Join with temporal constraint
+df_features = df_features.join(
+    attributes_table,
+    on=[Customer_ID match,
+        attributes.snapshot_date <= loan.snapshot_date],  # KEY!
+    how="left"
+)</code></pre>
+                </div>
+            </section>
+
+            <!-- Slide 9: Data Leakage Prevention - Clickstream Aggregation -->
+            <section>
+                <h2>Preventing Data Leakage #2</h2>
+                <p class="slide-subtitle">Handling time-series customer behavior data</p>
+
+                <div class="plain-english">
+                    <strong>The Problem:</strong> Clickstream has many rows per customer (one per month snapshot). We don't know loan application dates until Gold layer.
+                </div>
+
+                <div class="key-insight">
+                    📊 Solution at Gold Layer: When creating features for each loan (mob=0), look back 6 months and average the customer's clickstream activity
+                </div>
+
+                <div class="business-value">
+                    <strong>Why 6 Months?</strong> Arbitrary choice—captures recent behavior patterns. Can be tuned as a hyperparameter (3, 9, 12 months, etc.) based on model performance
+                </div>
+
+                <div class="technical-detail">
+                    <span class="section-label">TECHNICAL</span>
+                    <span class="code-label">SIMPLIFIED</span> (actual code in utils/data_processing_gold_table.py:305-341)
+                    <pre style="margin: 5px 0; font-size: 0.6em;"><code class="python"># At Gold layer (after we know loan application dates):
+# 1. For each loan at mob=0, define lookback window
+window_start = F.date_sub(col('loan_application_date'), 180)  # 6 months back
+
+# 2. Join all clickstream snapshots within window
+df_with_clickstream = df_features.join(clickstream,
+    on=[Customer_ID match,
+        clickstream.snapshot_date >= window_start,
+        clickstream.snapshot_date <= loan_application_date],  # Past only!
+    how="left")
+
+# 3. Group by loan and calculate average across those months
+agg_exprs = [F.avg(f"fe_{i}").alias(f"avg_fe_{i}_last_6m")
+             for i in range(1, 21)]</code></pre>
+                </div>
+            </section>
+
+            <!-- Slide 10: Next Steps -->
+            <section>
+                <h2>Production Readiness & Next Steps</h2>
+
+                <div class="card card-success">
+                    <h3>Immediate Outcomes</h3>
+                    <p>ML-ready feature and label stores ready for model development</p>
+                </div>
+
+                <div class="data-source">
+                    <strong>Model Training Integration</strong><br>
+                    Connect gold tables to ML training pipelines
+                </div>
+
+                <div class="data-source">
+                    <strong>Real-time Feature Serving</strong><br>
+                    Architecture for production inference
+                </div>
+
+                <div class="data-source">
+                    <strong>Monitoring & Drift Detection</strong><br>
+                    Track data quality and model performance
+                </div>
+
+                <div class="card card-warning" style="margin-top: 30px;">
+                    <h3>Future Enhancements</h3>
+                    <ul>
+                        <li>Additional data sources integration</li>
+                        <li>Advanced feature engineering</li>
+                        <li>Automated model retraining</li>
+                    </ul>
+                </div>
+
+                <div style="text-align: center; margin-top: 30px;">
+                    <div class="metric">Foundation for ML Operations</div>
+                    <div class="metric">Clear Path to Production</div>
+                </div>
+            </section>
+
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/reveal.js@4.5.0/dist/reveal.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/reveal.js@4.5.0/plugin/highlight/highlight.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/reveal.js@4.5.0/plugin/notes/notes.js"></script>
+    <script>
+        Reveal.initialize({
+            hash: true,
+            transition: 'slide',
+            transitionSpeed: 'default',
+            backgroundTransition: 'fade',
+            plugins: [ RevealHighlight, RevealNotes ],
+            slideNumber: 'c/t',
+            progress: true,
+            center: false,
+            width: 1280,
+            height: 720,
+            margin: 0.1
+        });
+    </script>
+</body>
+</html>
