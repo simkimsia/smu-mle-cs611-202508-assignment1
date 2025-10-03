@@ -1,5 +1,7 @@
 # ETL Pipeline - Running Instructions
 
+GitHub at https://github.com/simkimsia/smu-mle-cs611-202508-assignment1
+
 You can also watch [this](https://www.loom.com/share/d6379bab339a4c0da38c1285561b8056) if you prefer video 🎥 instead.
 
 ## Quick Start: Full Pipeline
