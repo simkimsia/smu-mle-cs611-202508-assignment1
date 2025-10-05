@@ -606,40 +606,44 @@ agg_exprs = [F.avg(f"fe_{i}").alias(f"avg_fe_{i}_last_6m")
 
             <!-- Slide 10: Next Steps -->
             <section>
-                <h2>Production Readiness & Next Steps</h2>
+                <h2>Pipeline Boundary & Next Steps</h2>
 
                 <div class="card card-success">
-                    <h3>Immediate Outcomes</h3>
-                    <p>ML-ready feature and label stores ready for model development</p>
+                    <h3>Data Pipeline Complete ✓</h3>
+                    <p>ML-ready feature store and label store (can be joined on <code>loan_id</code>)</p>
+                </div>
+
+                <div class="key-insight">
+                    🔀 Handoff Point: Data Pipeline → ML Pipeline
                 </div>
 
                 <div class="data-source">
-                    <strong>Model Training Integration</strong><br>
-                    Connect gold tables to ML training pipelines
+                    <strong>ML Pipeline: Data Preparation</strong><br>
+                    Join feature store + label store → training dataset
                 </div>
 
                 <div class="data-source">
-                    <strong>Real-time Feature Serving</strong><br>
-                    Architecture for production inference
+                    <strong>ML Pipeline: Data Splitting</strong><br>
+                    Create train/validation/test sets + OOT (Out-of-Time) dataset for temporal validation
                 </div>
 
                 <div class="data-source">
-                    <strong>Monitoring & Drift Detection</strong><br>
-                    Track data quality and model performance
+                    <strong>ML Pipeline: Model Development</strong><br>
+                    Additional feature engineering, model training, evaluation, deployment
                 </div>
 
                 <div class="card card-warning" style="margin-top: 30px;">
-                    <h3>Future Enhancements</h3>
+                    <h3>Production Enhancements</h3>
                     <ul>
-                        <li>Additional data sources integration</li>
-                        <li>Advanced feature engineering</li>
-                        <li>Automated model retraining</li>
+                        <li>Real-time feature serving architecture</li>
+                        <li>Monitoring & drift detection</li>
+                        <li>Automated model retraining pipelines</li>
                     </ul>
                 </div>
 
                 <div style="text-align: center; margin-top: 30px;">
                     <div class="metric">Foundation for ML Operations</div>
-                    <div class="metric">Clear Path to Production</div>
+                    <div class="metric">Clear Pipeline Separation</div>
                 </div>
             </section>
 
